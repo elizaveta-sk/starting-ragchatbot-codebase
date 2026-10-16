@@ -34,11 +34,18 @@ Provide only the direct answer to what was asked.
         self.model = model
         
         # Pre-build base API parameters
+        # Thinking is on by default and counts toward max_tokens; low effort keeps it short.
+        # output_config isn't in the pinned SDK's signature, so it goes through extra_body.
         self.base_params = {
             "model": self.model,
-            "temperature": 0,
-            "max_tokens": 800
+            "max_tokens": 16000,
+            "extra_body": {"output_config": {"effort": "low"}}
         }
+
+    @staticmethod
+    def _extract_text(response) -> str:
+        """Join text blocks; responses may also contain thinking blocks."""
+        return "".join(block.text for block in response.content if block.type == "text")
     
     def generate_response(self, query: str,
                          conversation_history: Optional[str] = None,
@@ -84,7 +91,7 @@ Provide only the direct answer to what was asked.
             return self._handle_tool_execution(response, api_params, tool_manager)
         
         # Return direct response
-        return response.content[0].text
+        return self._extract_text(response)
     
     def _handle_tool_execution(self, initial_response, base_params: Dict[str, Any], tool_manager):
         """
@@ -123,13 +130,16 @@ Provide only the direct answer to what was asked.
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
         
-        # Prepare final API call without tools
+        # Prepare final API call: keep the same tools (changing them would invalidate
+        # the replayed thinking blocks) but forbid further tool calls
         final_params = {
             **self.base_params,
             "messages": messages,
-            "system": base_params["system"]
+            "system": base_params["system"],
+            "tools": base_params["tools"],
+            "tool_choice": {"type": "none"}
         }
-        
+
         # Get final response
         final_response = self.client.messages.create(**final_params)
-        return final_response.content[0].text
+        return self._extract_text(final_response)
